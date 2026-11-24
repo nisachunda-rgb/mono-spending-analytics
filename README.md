@@ -2,7 +2,7 @@
 
 Пет-проєкт з аналізу даних: я вивантажила власну виписку через відкритий API monobank, проаналізувала структуру й динаміку витрат у pandas, знайшла типи покупок за допомогою ML-кластеризації та зробила веб-дашборд.
 
-**🔗 Дашборд:** https://YOUR-GITHUB-USERNAME.github.io/mono-spending-analytics/
+**🔗 Дашборд:** https://nisachunda-rgb.github.io/mono-spending-analytics/
 
 ## Що зроблено
 
