@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аналітика витрат monobank</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f6f8; --card: #fff; --text: #1c1c1f; --muted: #6b6b76;
+    --accent: #5b5bd6; --accent2: #30a46c; --border: #e6e6ec;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 48px; }
+  header h1 { margin: 0 0 6px; font-size: 28px; }
+  header p { margin: 0; color: var(--muted); line-height: 1.5; }
+  .badge { display: inline-block; margin-top: 12px; padding: 4px 10px; border-radius: 999px;
+           background: #ecebfd; color: var(--accent); font-size: 13px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+          gap: 12px; margin: 24px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+  .kpi .label { color: var(--muted); font-size: 13px; }
+  .kpi .value { font-size: 24px; font-weight: 600; margin-top: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .card h2 { margin: 0 0 4px; font-size: 17px; }
+  .card .sub { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .chart { position: relative; height: 300px; }
+  .note { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #fff6e5;
+          font-size: 13px; line-height: 1.5; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .bar { height: 8px; border-radius: 4px; background: var(--accent); }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Аналітика особистих витрат monobank</h1>
+    <p>Структура, динаміка й типи моїх покупок на основі виписки з відкритого API monobank.
+       Аналіз — Python (pandas, scikit-learn), візуалізація — Chart.js.</p>
+    <span class="badge" id="period"></span>
+  </header>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>На що я витрачаю</h2>
+      <p class="sub">Частка категорій у загальних витратах, %</p>
+      <div class="chart"><canvas id="catChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Динаміка по місяцях</h2>
+      <p class="sub">Індекс: середній місяць = 100 (лише повні місяці)</p>
+      <div class="chart"><canvas id="monthChart"></canvas></div>
+      <div class="note">З серпня витрати по цій картці майже зникли: після переїзду до Польщі
+        я користуюся місцевою карткою. Дані покривають лише один рахунок.</div>
+    </div>
+    <div class="card">
+      <h2>Дні тижня</h2>
+      <p class="sub">Частка покупок, %</p>
+      <div class="chart"><canvas id="dayChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Години доби</h2>
+      <p class="sub">Частка покупок, %</p>
+      <div class="chart"><canvas id="hourChart"></canvas></div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:16px">
+    <h2>Типи покупок (ML: кластеризація KMeans)</h2>
+    <p class="sub">Модель згрупувала покупки за розміром чека, часом доби та днем тижня.
+       Назви груп сформовані автоматично з їхніх характеристик.</p>
+    <table>
+      <thead><tr><th>Тип покупок</th><th>Покупок</th><th>Чек / медіана</th>
+        <th>Типова година</th><th>Топ-категорія</th><th style="width:28%">Частка витрат</th></tr></thead>
+      <tbody id="clusters"></tbody>
+    </table>
+  </section>
+
+  <footer>
+    🔒 Дашборд показує лише відсотки й індекси — без реальних сум і назв магазинів.<br>
+    Код і ноутбук з аналізом — у репозиторії на GitHub.
+  </footer>
+</div>
+
+<script src="data.js"></script>
+<script>
+  const S = window.SUMMARY;
+  const ACCENT = "#5b5bd6", GREEN = "#30a46c";
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.color = "#6b6b76";
+  Chart.defaults.plugins.legend.display = false;
+
+  const num = v => Number(v);
+  const topEntry = obj => Object.entries(obj).sort((a, b) => num(b[1]) - num(a[1]))[0];
+  const months = { "01":"січ","02":"лют","03":"бер","04":"кві","05":"тра","06":"чер",
+                   "07":"лип","08":"сер","09":"вер","10":"жов","11":"лис","12":"гру" };
+  const monthLabel = p => { const [y, m] = p.split("-"); return `${months[m]} ${y.slice(2)}`; };
+
+  // Header + KPI
+  document.getElementById("period").textContent =
+    `Період: ${monthLabel(S.period[0])} — ${monthLabel(S.period[1])}`;
+  const [topCat, topCatPct] = topEntry(S.categories_pct);
+  const [topDay, topDayPct] = topEntry(S.weekday_pct);
+  const [topHour] = topEntry(S.hour_pct);
+  const kpis = [
+    ["Покупок проаналізовано", S.purchases],
+    ["Найбільша категорія", `${topCat} · ${num(topCatPct).toFixed(0)}%`],
+    ["Найактивніший день", `${topDay} · ${num(topDayPct).toFixed(0)}%`],
+    ["Пікова година", `${topHour}:00`],
+    ["Типів покупок (ML)", S.clusters.length],
+  ];
+  document.getElementById("kpis").innerHTML = kpis.map(([l, v]) =>
+    `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
+
+  const pctAxis = { ticks: { callback: v => v + "%" }, grid: { color: "#eee" } };
+
+  // Categories
+  const cats = Object.entries(S.categories_pct).sort((a, b) => num(b[1]) - num(a[1]));
+  new Chart(catChart, {
+    type: "bar",
+    data: { labels: cats.map(c => c[0]), datasets: [{ data: cats.map(c => num(c[1])),
+            backgroundColor: ACCENT, borderRadius: 4 }] },
+    options: { indexAxis: "y", maintainAspectRatio: false,
+               scales: { x: pctAxis, y: { grid: { display: false } } },
+               plugins: { tooltip: { callbacks: { label: c => ` ${c.raw}%` } } } }
+  });
+
+  // Months
+  const mKeys = Object.keys(S.monthly_index);
+  new Chart(monthChart, {
+    type: "line",
+    data: { labels: mKeys.map(monthLabel), datasets: [
+      { data: mKeys.map(k => num(S.monthly_index[k])), borderColor: ACCENT,
+        backgroundColor: ACCENT, tension: 0.3, pointRadius: 5 },
+      { data: mKeys.map(() => 100), borderColor: "#aaa", borderDash: [5, 5],
+        pointRadius: 0, borderWidth: 1 } ] },
+    options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: { color: "#eee" } },
+               x: { grid: { display: false } } } }
+  });
+
+  // Weekdays
+  new Chart(dayChart, {
+    type: "bar",
+    data: { labels: Object.keys(S.weekday_pct), datasets: [{ data: Object.values(S.weekday_pct).map(num),
+            backgroundColor: ACCENT, borderRadius: 4 }] },
+    options: { maintainAspectRatio: false, scales: { y: pctAxis, x: { grid: { display: false } } } }
+  });
+
+  // Hours (0–23)
+  const hours = [...Array(24).keys()];
+  new Chart(hourChart, {
+    type: "bar",
+    data: { labels: hours.map(h => h + ":00"), datasets: [{ data: hours.map(h => num(S.hour_pct[h] ?? 0)),
+            backgroundColor: GREEN, borderRadius: 3 }] },
+    options: { maintainAspectRatio: false, scales: { y: pctAxis,
+               x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } } } }
+  });
+
+  // Clusters with auto-generated names
+  const nameCluster = c => {
+    const when = num(c["вихідні_pct"]) > 50 ? "у вихідні" : "у будні";
+    const h = num(c["типова_година"]);
+    const part = h < 12 ? "вранці" : h < 17 ? "вдень" : "ввечері";
+    const r = num(c["чек_відносно_медіани"]);
+    const size = r >= 1.2 ? "Великі" : r <= 0.9 ? "Дрібні" : "Середні";
+    return `${size} покупки ${when} ${part}`;
+  };
+  const clusters = [...S.clusters].sort((a, b) => num(b["частка_витрат_pct"]) - num(a["частка_витрат_pct"]));
+  const maxShare = Math.max(...clusters.map(c => num(c["частка_витрат_pct"])));
+  document.getElementById("clusters").innerHTML = clusters.map(c => `
+    <tr>
+      <td><b>${nameCluster(c)}</b></td>
+      <td>${c["покупок"]}</td>
+      <td>×${num(c["чек_відносно_медіани"]).toFixed(2)}</td>
+      <td>${num(c["типова_година"]).toFixed(0)}:00</td>
+      <td>${c["топ_категорія"]}</td>
+      <td><div style="display:flex;align-items:center;gap:8px">
+        <div class="bar" style="width:${num(c["частка_витрат_pct"]) / maxShare * 100}%"></div>
+        <span>${num(c["частка_витрат_pct"]).toFixed(1)}%</span></div></td>
+    </tr>`).join("");
+</script>
+</body>
+</html>
